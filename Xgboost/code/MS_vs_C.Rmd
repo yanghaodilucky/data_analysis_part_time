@@ -1,0 +1,135 @@
+---
+title: "machine_learning"
+author: "HD"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(xgboost)
+library(Matrix)
+library(lattice)
+library(pROC)
+library(readxl)
+library(ggplot2)
+library(caret)  # 用于数据划分
+```
+导入数据
+
+```{r}
+rm(list=ls())
+
+
+tdata <- read_excel("../data/tuoye.xlsx", col_names = TRUE, row.names(TRUE) )
+xdata <- read_excel("../data/xueqing.xlsx", col_names = TRUE, row.names(TRUE) )
+
+tdata <- tdata[, !(names(tdata) %in% c("BV/TV", "Tb.Sp", "M1"))]
+xdata <- xdata[, !(names(xdata) %in% c("BV/TV", "Tb.Sp", "M1"))]
+
+
+```
+
+
+## 备用模型
+
+将M组和S组合并，与c组比较
+
+```{r}
+tdata$group <- as.factor(tdata$group)
+
+# 将 group 变量转换为数值 (C=0, M=1, S=2)
+tdata$group <- as.numeric(tdata$group) - 1 
+
+#将group转换，C=0，M=1，S=1
+
+tdata$group[tdata$group == 2] <- 1
+
+```
+
+
+```{r}
+
+# 拆分为数据集和训练集
+set.seed(123)
+trainIndex <- createDataPartition(tdata$group, p = 0.7, list = FALSE)
+trainData <- tdata[trainIndex, ]
+testData <- tdata[-trainIndex, ]
+
+#提取特征和标签
+train_x <- as.matrix(trainData[, setdiff(names(tdata), "group")])
+train_y <- trainData$group
+test_x <- as.matrix(testData[, setdiff(names(tdata), "group")])
+test_y <- testData$group
+
+
+train_x <- train_x[, -1, drop = FALSE]
+test_x <- test_x[, -1, drop = FALSE]
+
+train_x <- data.matrix(train_x)  # 转换为数值型矩阵
+test_x <- data.matrix(test_x)    # 转换为数值型矩阵
+
+
+test_x <- apply(test_x, 2, as.numeric)  # 把字符型转换成数值型
+train_x <- apply(train_x, 2, as.numeric)
+
+test_x <- matrix(as.numeric(unlist(test_x)), nrow = nrow(test_x), byrow = FALSE)
+train_x <- matrix(as.numeric(unlist(train_x)), nrow = nrow(train_x), byrow = FALSE)
+
+str(test_x)
+str(train_x)
+
+
+
+dtrain <- xgb.DMatrix(data = train_x, label = train_y)
+dtest <- xgb.DMatrix(data = test_x, label = test_y)
+
+
+ # 设置xgboost参数
+
+params <- list(
+  objective = "binary:logistic",  # 二分类任务
+  eval_metric = "logloss",        # 二分类任务的评估指标
+  eta = 0.1,                     # 学习率
+  max_depth = 5,                  # 降低深度
+  subsample = 0.7,                # 让每棵树看到部分数据
+  colsample_bytree = 0.7          # 让每棵树用部分特征
+)
+
+# 训练模型
+xgb_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 100,  # 训练 100 轮
+  watchlist = list(train = dtrain, test = dtest),
+  print_every_n = 10
+)
+#预测并计算准确率
+
+# 预测结果是类别 1 的概率
+pred_probs <- predict(xgb_model, dtest)
+
+# 将概率转换为类别标签（0 或 1）
+pred_labels <- ifelse(pred_probs > 0.5, 1, 0)  # 以 0.5 为阈值
+
+# 计算准确率
+accuracy <- sum(pred_labels == test_y) / length(test_y)
+print(paste("测试集准确率:", round(accuracy, 4)))
+
+# 重要特征分析
+importance_matrix_t <- xgb.importance(feature_names = colnames(train_x), model = xgb_model)
+print(importance_matrix_t)
+
+# 保存重要性矩阵到 CSV 文件
+write.csv(importance_matrix_t, "../result/importance_matrix_t.csv", row.names = FALSE)
+
+# 画出重要性图
+xgb.plot.importance(importance_matrix_t)
+```
+
+
+

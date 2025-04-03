@@ -1,0 +1,579 @@
+---
+title: "machine_learning"
+author: "HD"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(xgboost)
+library(SHAPforxgboost)
+library(Matrix)
+library(lattice)
+library(pROC)
+library(readxl)
+library(dplyr)
+library(showtext)
+library(ggplot2)
+library(caret)  # 用于数据划分
+library(nnet) 
+```
+
+导入数据
+
+```{r}
+rm(list=ls())
+
+
+tdata <- read_excel("../data/tuoye.xlsx", col_names = TRUE, row.names(TRUE) )
+xdata <- read_excel("../data/xueqing.xlsx", col_names = TRUE, row.names(TRUE) )
+
+tdata <- tdata[, !(names(tdata) %in% c("BV/TV", "Tb.Sp", "M1"))]
+xdata <- xdata[, !(names(xdata) %in% c("BV/TV", "Tb.Sp", "M1"))]
+
+
+```
+
+
+# 唾液因子模型
+
+首先筛选唾液因子
+
+建立模型并且评估模型准确度：F1 score和accuracy
+```{r}
+tdata$group <- as.factor(tdata$group)
+
+# 将 group 变量转换为数值 (C=0, M=1, S=2)
+tdata$group <- as.numeric(tdata$group) - 1 
+
+```
+
+```{r}
+# 拆分为数据集和训练集
+set.seed(123)
+trainIndex <- createDataPartition(tdata$group, p = 0.7, list = FALSE)
+trainData <- tdata[trainIndex, ]
+testData <- tdata[-trainIndex, ]
+
+#提取特征和标签
+train_x_t <- as.matrix(trainData[, setdiff(names(tdata), "group")])
+train_y_t <- trainData$group
+test_x_t <- as.matrix(testData[, setdiff(names(tdata), "group")])
+test_y_t <- testData$group
+
+
+train_x_t <- train_x_t[, -1, drop = FALSE]
+test_x_t <- test_x_t[, -1, drop = FALSE]
+
+train_x_t <- data.matrix(train_x_t)  # 转换为数值型矩阵
+test_x_t <- data.matrix(test_x_t)    # 转换为数值型矩阵
+
+```
+
+
+```{r}
+
+test_x_t <- apply(test_x_t, 2, as.numeric)  # 把字符型转换成数值型
+train_x_t <- apply(train_x_t, 2, as.numeric)
+
+test_x_t <- matrix(as.numeric(unlist(test_x_t)), nrow = nrow(test_x_t), byrow = FALSE)
+train_x_t <- matrix(as.numeric(unlist(train_x_t)), nrow = nrow(train_x_t), byrow = FALSE)
+
+str(test_x_t)
+str(train_x_t)
+
+
+
+dtrain_t <- xgb.DMatrix(data = train_x_t, label = train_y_t)
+dtest_t <- xgb.DMatrix(data = test_x_t, label = test_y_t)
+
+```
+
+```{r}
+# 设置xgboost参数
+
+params <- list(
+  objective = "multi:softprob", # 多分类任务
+  num_class = 3,  #三个类别
+  eval_metric = "mlogloss",
+  eta = 0.3, #学习率
+  max_depth = 5,  # 降低深度
+  subsample = 0.7,  # 让每棵树看到部分数据
+  colsample_bytree = 0.7  # 让每棵树用部分特征
+)
+
+#训练模型
+t_model <- xgb.train(
+  params = params,
+  data = dtrain_t,
+  nrounds = 100,  # 训练 100 轮
+  watchlist = list(train = dtrain_t, test = dtest_t),
+  print_every_n = 10
+)
+
+```
+
+
+
+```{r}
+
+# 预测并计算准确率
+pred_probs <- predict(t_model, dtest_t)
+pred_matrix <- matrix(pred_probs, nrow = 3, byrow = TRUE)
+pred_labels <- max.col(t(pred_matrix)) - 1
+
+
+# 确保 pred_labels 和 test_y_t 都是因子，并且有相同的水平
+pred_labels <- factor(pred_labels, levels = c(0, 1, 2))
+test_y_t <- factor(test_y_t, levels = c(0, 1, 2))
+
+# 计算 F1 Score
+f1_score <- function(true, pred) {
+  cm <- table(true, pred)
+  precision <- diag(cm) / colSums(cm)
+  recall <- diag(cm) / rowSums(cm)
+  f1 <- 2 * (precision * recall) / (precision + recall)
+  return(mean(f1, na.rm = TRUE))
+}
+
+f1_t <- f1_score(test_y_t, pred_labels)
+print(paste("F1 Score:", round(f1_t, 4)))
+
+# 计算每个类别的 AUC
+auc_values <- sapply(1:3, function(class) {
+  if (sum(test_y_t == (class - 1)) > 0) {  # 检查当前类别的样本数量
+    binary_response <- as.numeric(test_y_t == (class - 1))
+    roc_curve <- roc(binary_response, pred_matrix[class, ])
+    return(auc(roc_curve))
+  } else {
+    return(NA)  # 如果样本数量为 0，返回 NA
+  }
+})
+
+print(paste("AUC for each class:", round(auc_values, 4)))
+
+# 绘制每个类别的 ROC 曲线
+par(mfrow = c(1, 3))
+for (class in 1:3) {
+  if (sum(test_y_t == (class - 1)) > 0) {  # 检查当前类别的样本数量
+    binary_response <- as.numeric(test_y_t == (class - 1))
+    roc_curve <- roc(binary_response, pred_matrix[class, ])
+    plot(roc_curve, main = paste("ROC Curve for Class", class - 1))
+    auc_value <- auc(roc_curve)
+    legend("bottomright", legend = paste("AUC =", round(auc_value, 4)), col = "blue", lty = 1)
+  } else {
+    plot(0, 0, type = "n", xlab = "", ylab = "", main = paste("Class", class - 1, "has no samples"))
+  }
+}
+
+
+
+#预测并计算准确率
+# 预测结果是 3 类的概率，需要取最大概率的类别
+pred_probs <- predict(t_model, dtest_t)
+pred_matrix <- matrix(pred_probs, nrow = 3, byrow = TRUE)
+pred_labels <- max.col(t(pred_matrix)) - 1  # 取概率最高的类别
+
+# 计算准确率
+t_accuracy <- sum(pred_labels == test_y_t) / length(test_y_t)
+print(paste("测试集准确率:", round(t_accuracy, 4)))
+
+# 重要特征分析
+importance_matrix_t <- xgb.importance(feature_names = colnames(train_x_t), model = t_model)
+print(importance_matrix_t)
+
+print(importance_matrix_t$Importance)
+
+write.csv(importance_matrix_t, "../result/importance_matrix_t.csv")
+write.csv(importance_matrix_t$Importance, "../result/importance_matrix_t_importance.csv")
+# 画出重要性图
+xgb.plot.importance(importance_matrix_t)
+
+
+mean_auc <- mean(auc_values)  # AUC 的平均值
+mean_f1_accuracy_auc <- mean(c(f1_t, t_accuracy, mean_auc))  # F1、准确率和 AUC 的平均值
+print(paste("Mean AUC:", round(mean_auc, 4)))
+print(paste("Mean of F1, Accuracy, and AUC:", round(mean_f1_accuracy_auc, 4)))
+
+```
+
+# 血清因子模型
+
+
+再筛选血清因子
+
+
+```{r}
+xdata$group <- as.factor(xdata$group)
+
+# 将 group 变量转换为数值 (C=0, M=1, S=2)
+xdata$group <- as.numeric(xdata$group) - 1 
+
+```
+
+```{r}
+# 拆分为数据集和训练集
+set.seed(123)
+trainIndex <- createDataPartition(tdata$group, p = 0.7, list = FALSE)
+trainData <- xdata[trainIndex, ]
+testData <- xdata[-trainIndex, ]
+
+#提取特征和标签
+train_x_x <- as.matrix(trainData[, setdiff(names(tdata), "group")])
+train_y_x <- trainData$group
+test_x_x <- as.matrix(testData[, setdiff(names(tdata), "group")])
+test_y_x <- testData$group
+
+
+train_x_x <- train_x_x[, -1, drop = FALSE]
+test_x_x <- test_x_x[, -1, drop = FALSE]
+
+train_x_x <- data.matrix(train_x_x)  # 转换为数值型矩阵
+test_x_x <- data.matrix(test_x_x)    # 转换为数值型矩阵
+
+```
+
+
+```{r}
+test_x_x <- apply(test_x_x, 2, as.numeric)  # 把字符型转换成数值型
+train_x_x <- apply(train_x_x, 2, as.numeric)
+
+test_x_x <- matrix(as.numeric(unlist(test_x_x)), nrow = nrow(test_x_x), byrow = FALSE)
+train_x_x <- matrix(as.numeric(unlist(train_x_x)), nrow = nrow(train_x_x), byrow = FALSE)
+
+str(test_x_x)
+str(train_x_x)
+
+
+
+dtrain_x <- xgb.DMatrix(data = train_x_x, label = train_y_x)
+dtest_x <- xgb.DMatrix(data = test_x_x, label = test_y_x)
+
+```
+
+```{r}
+# 设置xgboost参数
+
+params <- list(
+  objective = "multi:softprob", # 多分类任务
+  num_class = 3,  #三个类别
+  eval_metric = "mlogloss",
+  eta = 0.3, #学习率
+  max_depth = 5,  # 降低深度
+  subsample = 0.7,  # 让每棵树看到部分数据
+  colsample_bytree = 0.7  # 让每棵树用部分特征
+)
+
+#训练模型
+x_model <- xgb.train(
+  params = params,
+  data = dtrain_x,
+  nrounds = 100,  # 训练 100 轮
+  watchlist = list(train = dtrain_x, test = dtest_x),
+  print_every_n = 10
+)
+```
+
+
+```{r}
+# 预测并计算准确率
+pred_probs <- predict(x_model, dtest_x)
+pred_matrix <- matrix(pred_probs, nrow = 3, byrow = TRUE)
+pred_labels <- max.col(t(pred_matrix)) - 1
+
+
+# 确保 pred_labels 和 test_y 都是因子，并且有相同的水平
+pred_labels <- factor(pred_labels, levels = c(0, 1, 2))
+test_y_x <- factor(test_y_x, levels = c(0, 1, 2))
+
+# 计算 F1 Score
+f1_score <- function(true, pred) {
+  cm <- table(true, pred)
+  precision <- diag(cm) / colSums(cm)
+  recall <- diag(cm) / rowSums(cm)
+  f1 <- 2 * (precision * recall) / (precision + recall)
+  return(mean(f1, na.rm = TRUE))
+}
+
+f1_x <- f1_score(test_y_x, pred_labels)
+print(paste("F1 Score:", round(f1_x, 4)))
+
+# 计算每个类别的 AUC
+auc_values <- sapply(1:3, function(class) {
+  if (sum(test_y_x == (class - 1)) > 0) {  # 检查当前类别的样本数量
+    binary_response <- as.numeric(test_y_x == (class - 1))
+    roc_curve <- roc(binary_response, pred_matrix[class, ])
+    return(auc(roc_curve))
+  } else {
+    return(NA)  # 如果样本数量为 0，返回 NA
+  }
+})
+
+print(paste("AUC for each class:", round(auc_values, 4)))
+
+# 绘制每个类别的 ROC 曲线
+par(mfrow = c(1, 3))
+for (class in 1:3) {
+  if (sum(test_y_x == (class - 1)) > 0) {  # 检查当前类别的样本数量
+    binary_response <- as.numeric(test_y_x == (class - 1))
+    roc_curve <- roc(binary_response, pred_matrix[class, ])
+    plot(roc_curve, main = paste("ROC Curve for Class", class - 1))
+    auc_value <- auc(roc_curve)
+    legend("bottomright", legend = paste("AUC =", round(auc_value, 4)), col = "blue", lty = 1)
+  } else {
+    plot(0, 0, type = "n", xlab = "", ylab = "", main = paste("Class", class - 1, "has no samples"))
+  }
+}
+
+
+
+
+mean_auc <- mean(auc_values)  # AUC 的平均值
+mean_f1_accuracy_auc <- mean(c(f1_x, t_accuracy, mean_auc))  # F1、准确率和 AUC 的平均值
+print(paste("Mean AUC:", round(mean_auc, 4)))
+print(paste("Mean of F1, Accuracy, and AUC:", round(mean_f1_accuracy_auc, 4)))
+
+
+
+#预测并计算准确率
+
+# 预测结果是 3 类的概率，需要取最大概率的类别
+pred_probs <- predict(x_model, dtest_x)
+pred_matrix <- matrix(pred_probs, nrow = 3, byrow = TRUE)
+pred_labels <- max.col(t(pred_matrix)) - 1  # 取概率最高的类别
+
+# 计算准确率
+x_accuracy <- sum(pred_labels == test_y_x) / length(test_y_x)
+print(paste("测试集准确率:", round(x_accuracy, 4)))
+
+# 重要特征分析
+importance_matrix_x <- xgb.importance(feature_names = colnames(train_x_x), model = x_model)
+print(importance_matrix_x)
+
+print(importance_matrix_x$Importance)
+
+
+write.csv(importance_matrix_x, "../result/importance_matrix_x.csv")
+write.csv(importance_matrix_x$Importance, "../result/importance_matrix_x_importance.csv")
+
+# 画出重要性图
+xgb.plot.importance(importance_matrix_x)
+```
+
+总结：两个模型的准确度都是0.75，F1 score为0.778。AUC平均值为0.9
+
+
+
+# 交叉评估：比较三种分子在两种体液中的重要性
+
+重要性比较
+```{r}
+top3_t <- importance_matrix_t %>% arrange(desc(Gain)) %>% head(3)
+top3_x <- importance_matrix_x %>% arrange(desc(Gain)) %>% head(3)
+
+# 添加来源信息
+top3_t$Type <- "Saliva"
+top3_x$Type <- "Serum"
+
+
+
+# 合并数据
+importance_combined <- rbind(top3_t, top3_x)
+
+importance_combined <- importance_combined %>%
+  mutate(Feature = recode(Feature, 
+                          "f0" = "MCP1", 
+                          "f1" = "TNFa", 
+                          "f2" = "CASP1"))
+
+
+# 打印数据，确认格式
+print(importance_combined)
+
+
+
+ggplot(importance_combined, aes(x = reorder(Feature, -Gain), y = Gain, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  theme_bw() +  # 设定白色背景
+  labs(title = "Top 3 Feature Importance Comparison (Gain)", 
+       x = "Feature", 
+       y = "Importance (Gain)") +
+  scale_fill_manual(values = c("Saliva" = "#1f77b4", "Serum" = "#ff7f0e")) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1))
+ggsave("../visulization/因子重要性比较-Gain.png", width = 8, height = 6, dpi = 300)
+
+
+ggplot(importance_combined, aes(x = reorder(Feature, -Cover), y = Cover, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  theme_bw() +  # 设定白色背景
+  labs(title = "Top 3 Feature Importance Comparison (Cover)", 
+       x = "Feature", 
+       y = "Importance (Cover)") +
+  scale_fill_manual(values = c("Saliva" = "#1f77b4", "Serum" = "#ff7f0e")) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1))
+ggsave("../visulization/因子重要性比较-Cover.png", width = 8, height = 6, dpi = 300)
+
+ggplot(importance_combined, aes(x = reorder(Feature, -Frequency), y = Frequency, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  theme_bw() +  # 设定白色背景
+  labs(title = "Top 3 Feature Importance Comparison (Frequency)", 
+       x = "Feature", 
+       y = "Importance (Frequency)") +
+  scale_fill_manual(values = c("Saliva" = "#1f77b4", "Serum" = "#ff7f0e")) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1))
+ggsave("../visulization/因子重要性比较-frequency.png", width = 8, height = 6, dpi = 300)
+
+ggplot(importance_combined, aes(x = reorder(Feature, -Importance), y = Importance, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  theme_bw() +  # 设定白色背景
+  labs(title = "Top 3 Feature Importance Comparison (Importance)", 
+       x = "Feature", 
+       y = "Importance (Importance)") +
+  scale_fill_manual(values = c("Saliva" = "#1f77b4", "Serum" = "#ff7f0e")) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1))
+ggsave("../visulization/因子重要性比较-importance.png", width = 8, height = 6, dpi = 300)
+
+```
+
+# 交叉验证
+互换数据集预测
+用唾液因子训练XGBoost模型，然后用血清数据测试，计算AUC等评估指标。
+用血清因子训练XGBoost模型，然后用唾液数据测试，计算AUC等评估指标。
+
+如果交叉测试的 AUC 下降不大，说明模型泛化性较强，血清和唾液数据可以互相代替，甚至可能合并数据训练一个更稳定的模型。
+如果 AUC 下降很明显，说明数据来源差异较大，可能代表不同的生物过程，不能简单互换使用。这提示你可能需要针对不同数据源分别训练模型。
+如果某个模型在两种数据上都表现较好，说明这种数据可能更稳定，预测能力更强。
+
+```{r}
+
+
+# 使用唾液模型 (t_model) 预测血清数据
+pred_t_on_x <- predict(t_model, dtest_x)  
+
+# 由于 multi:softprob 输出的是每个类别的概率，需要转换为类别标签
+pred_t_on_x_label <- max.col(matrix(pred_t_on_x, ncol = 3)) - 1  
+
+# 计算 AUC
+auc_t_on_x <- multiclass.roc(test_y_x, pred_t_on_x_label)
+
+
+
+# 使用血清模型 (x_model) 预测唾液数据
+pred_x_on_t <- predict(x_model, dtest_t)  
+
+# 由于 multi:softprob 输出的是每个类别的概率，需要转换为类别标签
+pred_x_on_t_label <- max.col(matrix(pred_x_on_t, ncol = 3)) - 1  
+
+# 计算 AUC
+auc_x_on_t <- multiclass.roc(test_y_t, pred_x_on_t_label)
+
+
+
+# 计算唾液模型 (t_model) 在血清数据上的准确率
+accuracy_t_on_x <- mean(pred_t_on_x_label == test_y_x)
+
+
+# 计算血清模型 (x_model) 在唾液数据上的准确率
+accuracy_x_on_t <- mean(pred_x_on_t_label == test_y_t)
+
+
+
+# 计算 F1 Score
+f1_score <- function(true, pred) {
+  cm <- table(true, pred)
+  precision <- diag(cm) / colSums(cm)
+  recall <- diag(cm) / rowSums(cm)
+  f1 <- 2 * (precision * recall) / (precision + recall)
+  return(mean(f1, na.rm = TRUE))
+}
+
+
+f1_t_on_x <- f1_score(test_y_t, pred_t_on_x_label)
+
+
+f1_x_on_t <- f1_score(test_y_x, pred_x_on_t_label)
+
+
+
+
+
+print(auc_t_on_x)
+print(auc_x_on_t)
+print(accuracy_t_on_x)
+print(accuracy_x_on_t)
+print(paste("F1 Score t on x:", round(f1_t_on_x, 4)))
+print(paste("F1 Score x on t:", round(f1_x_on_t, 4)))
+
+```
+
+总体来看，血清模型更好，但唾液模型的Accuracy = 0.5 说明分类能力一般。
+
+
+
+因为血清模型有些过拟合，所以使用k折交叉验证重新评估血清模型的AUC 和 F1 Score。因为样本量较少，这里使用5折交叉验证。
+```{r}
+# F1 Score 计算函数
+f1_score <- function(true, pred) {
+  cm <- table(true, pred)
+  precision <- diag(cm) / colSums(cm)
+  recall <- diag(cm) / rowSums(cm)
+  f1 <- 2 * (precision * recall) / (precision + recall)
+  return(mean(f1, na.rm = TRUE))
+}
+
+set.seed(123)
+
+# 使用 5 折交叉验证
+train_control <- trainControl(method = "cv", number = 5, savePredictions = "all", classProbs = TRUE)
+
+# 创建模型
+model <- train(
+  group ~ .,  # 使用所有特征来预测 group
+  data = xdata,
+  method = "xgbTree",  # 使用 xgboost 的分类树模型
+  trControl = train_control,
+  tuneLength = 5,  # 自动选择最佳的参数组合
+  metric = "F1"  # 选择适用于分类任务的评估指标
+)
+
+
+# 查看交叉验证结果
+print(model)
+
+
+```
+评价指标:
+
+RMSE (均方根误差): 衡量模型预测值与实际值的差异，值越小越好。
+R-squared (R²值): 反映模型拟合的好坏，值越接近1越好。
+MAE (平均绝对误差): 衡量预测值与实际值的平均绝对差异，值越小越好。
+模型表现:
+
+在很多组合参数下，RMSE值非常小，R²值接近1，意味着模型拟合得非常好，几乎没有误差。
+比如，在 eta = 0.3, max_depth = 1, colsample_bytree = 0.6, subsample = 0.875等参数下，RMSE和MAE的值都非常小，表明模型的性能非常好。并且RMSE和R2的差距并不大，所以并没有过拟合。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

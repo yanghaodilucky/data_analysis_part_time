@@ -1,0 +1,231 @@
+---
+title: "difference_between_group"
+author: "HD"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggdendro)
+library(readxl)
+library(ggplot2)
+library(corrplot)
+library(psych)
+```
+
+## 导入数据
+```{r}
+rm(list=ls())
+
+
+tdata <- read_excel("../data/tuoye.xlsx", col_names = TRUE, row.names(TRUE) )
+xdata <- read_excel("../data/xueqing.xlsx", col_names = TRUE, row.names(TRUE) )
+
+```
+
+## 分析前准备
+合并两个数据集，唾液因子名+t，血清因子名+x
+```{r}
+names(tdata)[3:(ncol(tdata) - 3)] <- paste(names(tdata)[3:(ncol(tdata) - 3)], "_t", sep = "")
+
+names(xdata)[3:(ncol(xdata) - 3)] <- paste(names(xdata)[3:(ncol(xdata) - 3)], "_x", sep = "")
+
+
+columns_tdata <- c("group", "MCP1_t", "TNFa_t", "CASP1_t", "LDH_t", "GM-CSF_t", "MIP1a_t", 
+                   "HIF1a_t", "ALP_t", "BMP2_t", "VEGFA_t", "NTXI_t", "COX2_t", "MPO_t", 
+                   "IL6_t", "IL17_t", "IL1b_t", "CTSK_t", "MMP9_t", "PECAM1_t", "CAT_t", "MMP-8_t")
+
+columns_xdata <- c("MCP1_x", "TNFa_x", "CASP1_x", "LDH_x", "GM-CSF_x", "MIP1a_x", 
+                   "HIF1a_x", "ALP_x", "BMP2_x", "VEGFA_x", "NTXI_x", "COX2_x", "MPO_x", 
+                   "IL6_x", "IL17_x", "IL1b_x", "CTSK_x", "MMP9_x", "PECAM1_x", "CAT_x", 
+                   "MMP-8_x", "BV/TV", "Tb.Sp", "M1")
+
+tdata_selected <- tdata[, columns_tdata]
+xdata_selected <- xdata[, columns_xdata]
+
+data <- cbind(tdata_selected, xdata_selected)
+
+write.csv(data, "../data/combined_data.csv")
+```
+
+建立正态分布的因子集合和非正态分布的因子集合
+
+```{r}
+
+nom_factors <- c("MCP1_t", "TNFa_t", "CASP1_t", "LDH_t", "GM-CSF_t", "ALP_t", "VEGFA_t", 
+                 "MPO_t", "IL6_t", "IL1b_t", "CTSK_t", "MMP-8_t", "CAT_t", "CAT_x")  # 正态分布的因子
+
+non_nom_factors <- c("MIP1a_t", "HIF1a_t", "BMP2_t", "NTXI_t", "COX2_t", "IL17_t", "MMP9_t", 
+                     "PECAM1_t",   "MCP1_x",   "TNFa_x" ,  "CASP1_x" , "LDH_x"   , "GM-CSF_x" ,"MIP1a_x" ,"HIF1a_x" , "ALP_x"   , "BMP2_x" ,  "VEGFA_x" , "NTXI_x" ,  "COX2_x"  , "MPO_x"  ,  "IL6_x"   ,"IL17_x",   "IL1b_x" ,  "CTSK_x" ,  "MMP9_x"  , "PECAM1_x"  ,   "MMP-8_x" )  # 非正态分布的因子
+
+# 查看正态分布因子和非正态分布因子
+nom_factors
+non_nom_factors
+
+```
+
+## 组间差异分析
+对正态分布的因子进行ANOVA检验，并使用Benjamini-Hochberg (BH) 控制FDR
+
+```{r}
+# 创建一个存储每个因子的 p 值的向量
+p_values <- c()
+
+# 对每个正态分布的因子（nom_factors）进行 ANOVA 检验
+for (factor in nom_factors) {
+  # 进行单因素方差分析（ANOVA），使用 group 作为分组变量
+  aov_result <- aov(data[[factor]] ~ data$group)
+  # 获取 ANOVA 的 p 值
+  p_value <- summary(aov_result)[[1]]$`Pr(>F)`[1]
+  p_values <- c(p_values, p_value)
+}
+
+# 对 p 值进行 Benjamini-Hochberg (BH) FDR 校正
+fdr_results <- p.adjust(p_values, method = "BH")
+
+# 将校正后的 p 值和因子名存储在一个数据框中
+anova_results <- data.frame(Factor = nom_factors, P_value = p_values, FDR = fdr_results)
+
+# 筛选出 FDR 校正后 p 值小于 0.05 的显著因子
+significant_factors <- anova_results[anova_results$FDR < 0.001, ]
+
+# 查看显著因子
+print(significant_factors)
+
+```
+
+
+对非正态分布的因子进行Kruskal-Wallis检验，并使用Benjamini-Hochberg (BH) 控制FDR
+
+
+
+```{r}
+p_values <- numeric()
+
+# 对每个非正态分布因子进行Kruskal-Wallis检验
+for (factor in non_nom_factors) {
+  kruskal_test <- kruskal.test(data[[factor]] ~ data$group)
+  p_values[factor] <- kruskal_test$p.value
+}
+
+# 使用Benjamini-Hochberg方法调整p值
+fdr_results <- p.adjust(p_values, method = "BH")
+
+# 显示调整后的p值
+kw_results <- data.frame(Factor = non_nom_factors, P_value = p_values, FDR = fdr_results)
+
+significant_kw_factors <- kw_results[kw_results$FDR < 0.001, ]
+print(significant_kw_factors)
+
+write.csv(significant_factors, "../result/significant_factors.csv")
+write.csv(significant_kw_factors, "../result/significant_kw_factors.csv")
+
+```
+p值范围为0.05 发现全部都显著，
+将范围改为0.001之后，42个因子有39个显著
+
+可能是因为因子之间过度拟合，用层次聚类减少数量
+
+## 层次聚类
+
+```{r}
+# 提取因子数据，从第二列到倒数第四列
+factor_data <- data[, 2:(ncol(data) - 3)]
+
+# 标准化数据
+factor_data_scaled <- scale(factor_data)
+
+# 计算欧几里得距离
+dist_matrix <- dist(t(factor_data_scaled)) 
+
+# 执行层次聚类
+hclust_result <- hclust(dist_matrix, method = "ward.D2")
+
+# 绘制树状图
+
+plot(hclust_result, main = "Hierarchical Clustering of Factors", xlab = "Factors", ylab = "Distance")
+
+
+
+
+
+hclust_result$height
+
+threshold <- 2.5  # 假设选择合并距离大于50的地方
+clusters <- cutree(hclust_result, h = threshold)
+
+table(clusters)
+
+clusters
+```
+
+确定10个cluster
+
+```{r}
+# 查看每个因子的集群分配
+clusters <- cutree(hclust_result, k = 10)
+print(clusters)
+
+factor_names <- colnames(data)[2:(ncol(data) - 3)]  # 假设数据中因子从第二列到倒数第四列
+cluster_data <- data.frame(Factor = factor_names, Cluster = clusters)
+
+# 使用ggplot2进行可视化
+library(ggplot2)
+cluster_plot <- ggplot(cluster_data, aes(x = Factor, y = Cluster, color = as.factor(Cluster))) +
+  geom_point(size = 5) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Clustering of Factors", x = "Factors", y = "Cluster") +
+  scale_color_manual(values = rainbow(15))  # 设置颜色
+
+# 使用 ggsave 保存 ggplot 图像为 PNG 格式
+ggsave("../visulization/cluster_plot.png", width = 10, height = 10, dpi = 300)
+
+```
+
+
+```{r}
+library(randomForest)
+
+# 创建一个随机森林模型
+rf_model <- randomForest(as.factor(clusters) ~ ., data = data[ , 2:(ncol(data) - 3)])
+
+# 查看重要的因子
+importance(rf_model)
+
+
+```
+每个集群选择一个代表性因子
+```{r}
+library(stats)
+pca_result <- prcomp(data[ , 2:(ncol(data) - 3)], scale = TRUE)
+
+# 查看主成分
+summary(pca_result)
+
+pca_result$rotation
+
+pca_result_9 <- pca_result$x[, 1:5]
+
+biplot(pca_result, main = "PCA Biplot with First 9 Components")
+```
+
+
+
+
+## 可视化
+
+
+
+
+
+
+
+
+
+
+

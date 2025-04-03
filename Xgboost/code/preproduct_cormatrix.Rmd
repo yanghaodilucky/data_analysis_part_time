@@ -1,0 +1,392 @@
+---
+title: "preproduct_cormatrix"
+author: "HD"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(corrplot)
+library(psych)
+```
+
+#  数据预处理
+
+
+## 导入数据
+```{r}
+rm(list=ls())
+
+
+tdata <- read_excel("../data/tuoye.xlsx", col_names = TRUE, row.names(TRUE) )
+xdata <- read_excel("../data/xueqing.xlsx", col_names = TRUE, row.names(TRUE) )
+
+```
+
+## 数据清洗 正态性检验
+
+检查正态性
+Shapiro-Wilk 检验
+p < 0.05证明不是正态分布
+
+唾液数据
+```{r}
+#创建因子列表
+
+factors <- colnames(tdata)[3:(ncol(tdata)-3)]  
+
+#对因子正态性逐个检验
+normality <- data.frame(Factor = character(), Shapiro_p_value = numeric(), stringsAsFactors = FALSE)
+
+# 遍历每个因子，进行Shapiro-Wilk检验
+for (factor in factors) {
+  test_result <- shapiro.test(tdata[[factor]])  # 对每个因子进行正态性检验
+  normality <- rbind(normality, data.frame(Factor = factor, Shapiro_p_value = test_result$p.value))
+}
+
+normality
+
+not_normal_tfactors <- subset(normality, Shapiro_p_value < 0.05)
+not_normal_tfactors
+
+write.csv(not_normal_tfactors, "../result/tdata_not_normal.csv", row.names = FALSE)
+
+```
+
+血清数据
+```{r}
+
+#对因子正态性逐个检验
+normality <- data.frame(Factor = character(), Shapiro_p_value = numeric(), stringsAsFactors = FALSE)
+
+# 遍历每个因子，进行Shapiro-Wilk检验
+for (factor in factors) {
+  test_result <- shapiro.test(xdata[[factor]])  # 对每个因子进行正态性检验
+  normality <- rbind(normality, data.frame(Factor = factor, Shapiro_p_value = test_result$p.value))
+}
+
+normality
+
+not_normal_xfactors <- subset(normality, Shapiro_p_value < 0.05)
+not_normal_xfactors
+
+write.csv(not_normal_xfactors, "../result/xdata_not_normal.csv", row.names = FALSE)
+
+```
+最终得到血清数据中除了CAT都是非正态数据
+唾液数据中非正态数据包括：MIP1a, HIF1a, BMP2, NTXI, COX2, IL17, MMP9, PECAM1
+
+
+
+
+# 相关性分析
+正态分布数据使用Pearson 相关系数，非正态分布的数据使用Spearman 相关系数
+
+## BV/TV与唾液因子
+相关性矩阵
+```{r}
+# 正态分布因子
+cor_matrix_BVTV_t <- cor(tdata[, c("BV/TV",  "MCP1" ,  "TNFa" ,  "CASP1" , "LDH" ,   "GM-CSF" ,  "ALP"   ,   "VEGFA"   , "MPO"  ,  "IL6" ,    "IL1b"  , "CTSK"   ,   "MMP-8",  "CAT"  )], use = "complete.obs", method = "pearson")
+
+write.csv(cor_matrix_BVTV_t, "../result/cor_matrix/bvtv_t.csv",row.names = TRUE) 
+
+# 非正态分布因子
+cor_matrix_spearman_BVTV_t <- cor(tdata[, c("BV/TV",  "MIP1a" , "HIF1a" ,  "BMP2"  , "NTXI" ,  "COX2"   ,   "IL17"  , "MMP9" ,  "PECAM1" )], use = "complete.obs", method = "spearman")
+
+write.csv(cor_matrix_spearman_BVTV_t, "../result/cor_matrix/bvtv_t_non_normal.csv", row.names = TRUE) 
+
+
+tdata$Tb.Sp
+```
+
+可视化
+```{r}
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_BVTV_t, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_spearman_BVTV_t, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+
+
+
+#corrplot(cor_matrix_spearman_BVTV_t, method = "circle", type = "upper",  addCoef.col = "black", order = #"hclust", tl.col = "black", tl.srt = 45)
+```
+
+相关性显著性检验
+```{r}
+normal_tfactors <- c("MCP1", "TNFa", "CASP1", "LDH", "GM-CSF", "ALP", "VEGFA", "MPO", "IL6", "IL1b", "CTSK", "MMP-8", "CAT")
+
+non_normal_tfactors <- c("MIP1a", "HIF1a", "BMP2", "NTXI", "COX2", "IL17", "MMP9", "PECAM1")
+
+
+
+cor_test_normal_BVTV_t <- data.frame(Factor = character(), 
+                              Pearson_p_value = numeric(), 
+                              stringsAsFactors = FALSE)
+
+# 对每个正态分布的因子进行 Pearson 相关性检验
+for (factor in normal_tfactors) {
+  test_result <- cor.test(tdata$`BV/TV`, tdata[[factor]], method = "pearson")
+  cor_test_normal_BVTV_t <- rbind(cor_test_normal_BVTV_t, data.frame(Factor = factor, Pearson_p_value = test_result$p.value))
+}
+
+
+
+
+
+cor_test_non_normal_bvtv_t <- data.frame(Factor = character(), 
+                                  Spearman_p_value = numeric(), 
+                                  stringsAsFactors = FALSE)
+
+# 对每个非正态分布的因子进行 Spearman 相关性检验
+for (factor in non_normal_tfactors) {
+  test_result <- cor.test(tdata$`BV/TV`, tdata[[factor]], method = "spearman")
+  cor_test_non_normal_bvtv_t <- rbind(cor_test_non_normal_bvtv_t, data.frame(Factor = factor, Spearman_p_value = test_result$p.value))
+}
+
+
+cor_test_normal_BVTV_t
+cor_test_non_normal_bvtv_t
+
+write.csv(cor_test_normal_BVTV_t, "../result/cor_test_bvtv_t.csv", row.names = FALSE)
+
+write.table(cor_test_non_normal_bvtv_t, "../result/cor_test_bvtv_t.csv", append = TRUE, sep = ",", col.names = TRUE, row.names = FALSE)
+```
+
+## BV/TV与血清因子
+```{r}
+
+cor_matrix_bvtv_x <- cor(tdata[, c("BV/TV", "CAT" )], use = "complete.obs", method = "pearson")
+
+write.csv(cor_matrix_bvtv_x, "../result/cor_matrix/bvtv_x.csv",row.names = TRUE) 
+
+
+
+# 血清因子除了CAT都为非正态分布
+cor_matrix_spearman_BVTV_x <- cor(xdata[, c("BV/TV", factors[factors != "CAT"])], use = "complete.obs", method = "spearman")
+
+write.csv(cor_matrix_spearman_BVTV_x, "../result/cor_matrix/bvtv_x_non_normal.csv", row.names = TRUE) 
+```
+
+```{r}
+corrplot(cor_matrix_bvtv_x, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+corrplot(cor_matrix_spearman_BVTV_x, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_bvtv_x, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_spearman_BVTV_x, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+
+```
+
+
+## Tb.sp与唾液因子
+```{r}
+# 正态分布因子
+cor_matrix_tbsp_t <- cor(tdata[, c("Tb.Sp",  "MCP1" ,  "TNFa" ,  "CASP1" , "LDH" ,   "GM-CSF" ,  "ALP"   ,   "VEGFA"   , "MPO"  ,  "IL6" ,    "IL1b"  , "CTSK"   ,   "MMP-8", "CAT" )], use = "complete.obs", method = "pearson")
+
+write.csv(cor_matrix_tbsp_t, "../result/cor_matrix/tbsp_t.csv",row.names = TRUE) 
+
+# 非正态分布因子
+cor_matrix_spearman_tbsp_t <- cor(tdata[, c("Tb.Sp",  "MIP1a" , "HIF1a" ,  "BMP2"  , "NTXI" ,  "COX2"   ,   "IL17"  , "MMP9" ,  "PECAM1")], use = "complete.obs", method = "spearman")
+
+write.csv(cor_matrix_spearman_tbsp_t, "../result/cor_matrix/tbsp_t_non_normal.csv", row.names = TRUE) 
+```
+
+```{r}
+corrplot(cor_matrix_tbsp_t, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+corrplot(cor_matrix_spearman_tbsp_t, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_tbsp_t, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_spearman_tbsp_t, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+
+
+```
+
+## Tb.Sp与血清因子
+```{r}
+cor_matrix_tbsp_x <- cor(tdata[, c("Tb.Sp", "CAT" )], use = "complete.obs", method = "pearson")
+
+write.csv(cor_matrix_tbsp_x, "../result/cor_matrix/tbsp_x.csv",row.names = TRUE) 
+
+
+
+# 血清因子除了CAT都为非正态分布
+cor_matrix_spearman_tbsp_x <- cor(xdata[, c("Tb.Sp", factors[factors != "CAT"])], use = "complete.obs", method = "spearman")
+
+write.csv(cor_matrix_spearman_tbsp_x, "../result/cor_matrix/tbsp_x_non_normal.csv", row.names = TRUE) 
+
+```
+
+```{r}
+corrplot(cor_matrix_tbsp_x, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+corrplot(cor_matrix_spearman_tbsp_x, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_tbsp_x, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_spearman_tbsp_x, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+```
+
+## M1与唾液因子
+```{r}
+# 正态分布因子
+cor_matrix_m1_t <- cor(tdata[, c("M1",  "MCP1" ,  "TNFa" ,  "CASP1" , "LDH" ,   "GM-CSF" ,  "ALP"   ,   "VEGFA"   , "MPO"  ,  "IL6" ,    "IL1b"  , "CTSK"   ,   "MMP-8" , "CAT")], use = "complete.obs", method = "pearson")
+
+write.csv(cor_matrix_m1_t, "../result/cor_matrix/m1_t.csv",row.names = TRUE) 
+
+# 非正态分布因子
+cor_matrix_spearman_m1_t <- cor(tdata[, c("M1",  "MIP1a" , "HIF1a" ,  "BMP2"  , "NTXI" ,  "COX2"   ,   "IL17"  , "MMP9" ,  "PECAM1" )], use = "complete.obs", method = "spearman")
+
+write.csv(cor_matrix_spearman_m1_t, "../result/cor_matrix/m1_t_non_normal.csv", row.names = TRUE) 
+```
+
+```{r}
+corrplot(cor_matrix_m1_t, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+corrplot(cor_matrix_spearman_m1_t, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_m1_t, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_spearman_m1_t, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+```
+
+## Tb.Sp与血清因子
+```{r}
+cor_matrix_m1_x <- cor(tdata[, c("M1", "CAT" )], use = "complete.obs", method = "pearson")
+
+write.csv(cor_matrix_m1_x, "../result/cor_matrix/m1_x.csv",row.names = TRUE) 
+
+
+
+# 血清因子除了CAT都为非正态分布
+cor_matrix_spearman_m1_x <- cor(xdata[, c("M1", factors[factors != "CAT"])], use = "complete.obs", method = "spearman")
+
+write.csv(cor_matrix_spearman_m1_x, "../result/cor_matrix/m1_x_non_normal.csv", row.names = TRUE) 
+```
+
+
+
+
+
+```{r}
+corrplot(cor_matrix_m1_x, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+corrplot(cor_matrix_spearman_m1_x, method = "circle", type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_m1_x, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+
+# Create a mixed correlation plot with numbers and circles, with factor names at the top
+corrplot::corrplot.mixed(cor_matrix_spearman_m1_x, 
+                         upper = "circle",         # 上半部分显示相关性图
+                         lower = "number",         # 下半部分显示相关性系数
+                         number.cex = 0.7,         # 控制数字大小
+                         tl.col = "black",         # 标签颜色
+                         tl.srt = 45,              # 标签旋转角度
+                         tl.pos = "lt",             # 因子名字放在顶部
+                         order = "hclust")         # 聚类排序
+```
+
+
+
+
+
+
+
+
+
+

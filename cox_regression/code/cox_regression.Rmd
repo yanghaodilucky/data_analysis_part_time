@@ -1,0 +1,141 @@
+---
+title: "R2"
+author: "HD"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(rms)
+library(Hmisc)
+library(survival)
+```
+
+```{r}
+rm(list=ls())
+
+data_4 <- read.csv("../data/predictrisk4y.csv")
+data_20 <- read.csv("../data/predictrisk20y.csv")
+```
+
+
+
+```{r}
+
+data_4$ranked_PI_with_race <- rank(data_4$LP_With_Race)
+data_4$ranked_PI_without_race <- rank(data_4$LP_Without_Race)
+
+data_4$rankit_with_race <- qnorm((data_4$ranked_PI_with_race - 0.5) / nrow(data_4))
+data_4$rankit_without_race <- qnorm((data_4$ranked_PI_without_race - 0.5) / nrow(data_4))
+
+
+kappa <- sqrt(8 / pi)
+
+data_4$scaled_rankit_with_race <- data_4$rankit_with_race / kappa
+data_4$scaled_rankit_without_race <- data_4$rankit_without_race / kappa
+
+
+cox_model_with_race_4 <- coxph(Surv(CombindT_m, 终点事件) ~ scaled_rankit_with_race, data = data_4)
+cox_model_without_race_4 <- coxph(Surv(CombindT_m, 终点事件) ~ scaled_rankit_without_race, data = data_4)
+
+D_with_race_4 <- summary(cox_model_with_race_4)$coefficients[1, 1]  # 回归系数D (含种族模型)
+D_without_race_4 <- summary(cox_model_without_race_4)$coefficients[1, 1]  # 回归系数D (不含种族模型)
+
+
+sigma2 <- pi^2 / 6
+
+R2D_with_race_4 <- D_with_race_4^2 / (D_with_race_4^2 + sigma2)
+R2D_without_race_4 <- D_without_race_4^2 / (D_without_race_4^2 + sigma2)
+
+cat("4年 R²D (with race):", round(R2D_with_race_4 * 100, 2), "%\n")
+cat("4年 R²D (without race):", round(R2D_without_race_4 * 100, 2), "%\n")
+
+
+
+```
+
+```{r}
+# 排序预后指数 (PI)
+data_4$ranked_PI_with_race <- rank(data_4$LP_With_Race)
+data_4$ranked_PI_without_race <- rank(data_4$LP_Without_Race)
+
+# 使用qnorm来获得标准正态分位点 (rankit)
+data_4$rankit_with_race <- qnorm((data_4$ranked_PI_with_race - 0.5) / nrow(data_4))
+data_4$rankit_without_race <- qnorm((data_4$ranked_PI_without_race - 0.5) / nrow(data_4))
+
+
+# 常量因子
+kappa <- sqrt(8 / pi)
+
+# 标准化rankits
+data_4$scaled_rankit_with_race <- data_4$rankit_with_race / kappa
+data_4$scaled_rankit_without_race <- data_4$rankit_without_race / kappa
+
+
+# 使用Cox回归模型
+cox_model_with_race_4 <- coxph(Surv(CombindT_m, 终点事件) ~ scaled_rankit_with_race, data = data_4)
+cox_model_without_race_4 <- coxph(Surv(CombindT_m, 终点事件) ~ scaled_rankit_without_race, data = data_4)
+
+# 获取Cox回归系数D
+D_with_race_4 <- summary(cox_model_with_race_4)$coefficients[1, 1]  # 回归系数D (含种族模型)
+D_without_race_4 <- summary(cox_model_without_race_4)$coefficients[1, 1]  # 回归系数D (不含种族模型)
+
+
+# 常量 σ² = π² / 6 ≈ 1.645
+sigma2 <- pi^2 / 6
+
+# 计算R²D
+R2D_with_race_4 <- D_with_race_4^2 / (D_with_race_4^2 + sigma2)
+R2D_without_race_4 <- D_without_race_4^2 / (D_without_race_4^2 + sigma2)
+
+# 输出结果
+cat("4年 R²D (with race):", round(R2D_with_race_4 * 100, 2), "%\n")
+cat("4年 R²D (without race):", round(R2D_without_race_4 * 100, 2), "%\n")
+```
+
+
+```{r}
+# 排序预后指数 (PI)
+data_20$ranked_PI_with_race <- rank(data_20$LP_With_Race)
+data_20$ranked_PI_without_race <- rank(data_20$LP_Without_Race)
+
+# 使用qnorm来获得标准正态分位点 (rankit)
+data_20$rankit_with_race <- qnorm((data_20$ranked_PI_with_race - 0.5) / nrow(data_20))
+data_20$rankit_without_race <- qnorm((data_20$ranked_PI_without_race - 0.5) / nrow(data_20))
+
+
+# 常量因子
+kappa <- sqrt(8 / pi)
+
+# 标准化rankits
+data_20$scaled_rankit_with_race <- data_20$rankit_with_race / kappa
+data_20$scaled_rankit_without_race <- data_20$rankit_without_race / kappa
+
+
+# 使用Cox回归模型
+cox_model_with_race_20 <- coxph(Surv(CombindT_m, 终点事件) ~ scaled_rankit_with_race, data = data_20)
+cox_model_without_race_20 <- coxph(Surv(CombindT_m, 终点事件) ~ scaled_rankit_without_race, data = data_20)
+
+# 获取Cox回归系数D
+D_with_race_20 <- summary(cox_model_with_race_20)$coefficients[1, 1]  # 回归系数D (含种族模型)
+D_without_race_20 <- summary(cox_model_without_race_20)$coefficients[1, 1]  # 回归系数D (不含种族模型)
+
+
+# 常量 σ² = π² / 6 ≈ 1.645
+sigma2 <- pi^2 / 6
+
+# 计算R²D
+R2D_with_race_20 <- D_with_race_20^2 / (D_with_race_20^2 + sigma2)
+R2D_without_race_20 <- D_without_race_20^2 / (D_without_race_20^2 + sigma2)
+
+# 输出结果
+cat("20年 R²D (with race):", round(R2D_with_race_20 * 100, 2), "%\n")
+cat("20年 R²D (without race):", round(R2D_without_race_20 * 100, 2), "%\n")
+
+```

@@ -1,0 +1,91 @@
+---
+title: "IDI_NRI"
+author: "HD"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(survival)
+library(survC1)
+library(survIDINRI)
+```
+
+导入数据
+```{r}
+rm(list=ls())
+
+data_4 <- read.csv("../data/新旧模型第4年数据.csv")
+data_5 <- read.csv("../data/新旧模型第5年数据.csv")
+data_20 <- read.csv("../data/新旧模型第20年数据.csv")
+
+```
+
+```{r}
+
+t0=48
+set.seed(123)#--- inference一-
+
+x<-IDI.INF(dev[,c(11,20)]，covs0，covs1，t0，npert=200)5#11及20列分别是生存时间和生存终点
+#--- results -
+
+IDI.INF.OUT(X) :
+
+
+
+
+
+# 提取事件状态和预测概率
+event <- data_4$终点事件  # 替换为实际的事件列名
+p_old <- data_4$Predicted_risk_with_race_60  # 旧模型预测概率
+p_new <- data_4$Predicted_risk_with_race_48  # 新模型预测概率
+
+
+time <- data_4$CombindT_m
+
+x <- data_4[, c("eGFR", "MAP", "LP_With_Race", "LP_Without_Race", 
+                "Risk_Group_With", "Risk_Group_Without", "Probability", "Estimated.years")]
+
+# 将 "Risk_Group_With" 和 "Risk_Group_Without" 转换为数值型变量
+x$Risk_Group_With <- as.numeric(factor(x$Risk_Group_With, 
+                                        levels = c("Low Risk", "Intermediate Risk", "Higher Risk", "Highest Risk")))
+
+x$Risk_Group_Without <- as.numeric(factor(x$Risk_Group_Without, 
+                                           levels = c("Low Risk", "Intermediate Risk", "Higher Risk", "Highest Risk")))
+
+# 计算 IDI 和 NRI
+IDI_result <- IDI.INF.GRAPH(event = event, time = time, x = x, p.std = p_old, p.new = p_new)
+NRI_result <- NRI.INF.GRAPH(event = event, time = time, x = x, p.std = p_old, p.new = p_new)
+
+# 查看结果
+print(IDI_result)
+print(NRI_result)
+```
+
+
+
+
+
+
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+  
+
+
+

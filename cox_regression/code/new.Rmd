@@ -1,0 +1,328 @@
+---
+title: "IDI_NRI"
+author: "HD"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(survival)
+library(Hmisc)
+library(rms)
+library(PredictABEL)
+```
+
+导入数据
+```{r}
+rm(list=ls())
+
+data_4 <- read.csv("../data/新旧模型第4年数据.csv")
+data_5 <- read.csv("../data/新旧模型第5年数据.csv")
+data_20 <- read.csv("../data/新旧模型第20年数据.csv")
+
+```
+
+
+```{r}
+# 创建基于目标变量的分类
+data_4$death_binary <- ifelse(data_4$终点事件 == 1, 1, 0)
+
+# 设置阈值，这里假设阈值为0.5
+threshold <- 0.5
+
+# 计算IDI（手动计算新旧模型之间的差异）
+calculate_IDI <- function(model1, model2, true_values) {
+  # 计算预测概率的差异
+  diff <- model1 - model2
+  # 返回IDI值：所有样本差异的平均值
+  mean(diff)
+}
+
+# 计算NRI（手动计算样本的重分类结果）
+calculate_NRI <- function(model1, model2, true_values, threshold) {
+  # 将预测值转化为0/1分类结果
+  pred1_class <- ifelse(model1 >= threshold, 1, 0)
+  pred2_class <- ifelse(model2 >= threshold, 1, 0)
+  
+  # 计算重分类情况
+  up_classification <- sum(pred1_class == 1 & pred2_class == 0 & true_values == 1) + sum(pred1_class == 0 & pred2_class == 1 & true_values == 0)
+  down_classification <- sum(pred1_class == 0 & pred2_class == 1 & true_values == 1) + sum(pred1_class == 1 & pred2_class == 0 & true_values == 0)
+  
+  # NRI计算公式
+  nri <- (up_classification - down_classification) / length(true_values)
+  return(nri)
+}
+
+# 计算两个模型的IDI和NRI
+IDI_60 <- calculate_IDI(data_4$Predicted_risk_with_race_60, data_4$Predicted_risk_with_race_48, data_4$DEATH)
+IDI_48 <- calculate_IDI(data_4$Predicted_risk_without_race_60, data_4$Predicted_risk_without_race_48, data_4$DEATH)
+
+NRI_60 <- calculate_NRI(data_4$Predicted_risk_with_race_60, data_4$Predicted_risk_with_race_48, data_4$DEATH, threshold)
+NRI_48 <- calculate_NRI(data_4$Predicted_risk_without_race_60, data_4$Predicted_risk_without_race_48, data_4$DEATH, threshold)
+
+# 输出结果
+print(paste("IDI for Model 1 (with race):", IDI_60))
+print(paste("IDI for Model 2 (without race):", IDI_48))
+print(paste("NRI for Model 1 (with race):", NRI_60))
+print(paste("NRI for Model 2 (without race):", NRI_48))
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+
+# 确保生存时间和事件信息是数值型
+data_4$event <- as.numeric(data_4$终点事件)  # 终点事件 (0=无, 1=有)
+data_4$time <- as.numeric(data_4$CombindT_m)  # 随访时间 
+
+
+# 提取新旧模型的预测概率
+p_old <- data_4$Predicted_risk_with_race_60  # 旧模型
+p_new <- data_4$Predicted_risk_with_race_48  # 新模型
+
+
+
+```
+
+```{R}
+# 创建生存数据对象
+Surv_obj <- Surv(data_4$time, data_4$event)
+
+# 计算 NRI
+nri_result <- nri(Surv_obj ~ p_old + p_new, data = data_4)
+print(summary(nri_result))
+
+# 计算旧模型的 C-index
+cindex_old <- cindex(Surv_obj, p_old)
+
+# 计算新模型的 C-index
+cindex_new <- cindex(Surv_obj, p_new)
+
+# 计算 IDI
+idi_result <- cindex_new - cindex_old
+print(idi_result)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# 检查事件变量是否为 0/1
+table(data_4$event, useNA = "always")  # 应仅包含 0 和 1，无 NA
+
+# 检查时间变量是否非负且 ≤48
+summary(data_4$time)  # 最小值 ≥0，最大值 =48
+
+# 检查预测概率是否在 [0,1] 范围内
+summary(p_old)  # 旧模型预测风险
+summary(p_new)  # 新模型预测风险
+
+```
+```{r}
+# 修正预测概率范围（强制限制在[0.001, 0.999]）
+p_old <- pmax(pmin(p_old, 0.999), 0.001)  # 避免0和1
+p_new <- pmax(pmin(p_new, 0.999), 0.001)
+
+# 检查修正后的分布
+summary(p_old)
+summary(p_new)
+
+# 移除可能的异常行（可选）
+data_clean <- data_4[!(p_old == 1 | p_new == 1), ]
+
+```
+
+
+```{r}
+# 计算 IDI = mean(p_new[event == 1]) - mean(p_old[event == 1]) - (mean(p_new[event == 0]) - mean(p_old[event == 0]))
+idi_new <- mean(p_new[data_4$event == 1])
+idi_old <- mean(p_old[data_4$event == 1])
+idi_new_neg <- mean(p_new[data_4$event == 0])
+idi_old_neg <- mean(p_old[data_4$event == 0])
+
+IDI <- (idi_new - idi_old) - (idi_new_neg - idi_old_neg)
+print(IDI)
+```
+
+```{r}
+# 定义一个临界值，例如 0.5
+threshold <- 0.5
+
+# 根据这个临界值来重新分类
+pred_old_class <- ifelse(p_old > threshold, 1, 0)
+pred_new_class <- ifelse(p_new > threshold, 1, 0)
+
+# 计算新模型和旧模型的正确分类改变
+reclassified_up <- sum(pred_new_class == 1 & pred_old_class == 0 & data_4$event == 1)  # 事件正确上升
+reclassified_down <- sum(pred_new_class == 0 & pred_old_class == 1 & data_4$event == 0)  # 非事件正确下降
+
+nri <- (reclassified_up + reclassified_down) / sum(data_4$event == 1 | data_4$event == 0)
+print(nri)
+
+```
+
+
+
+
+```{r}
+# 设置自助法重复次数
+npert <- 1000
+
+# 计算 IDI 和 NRI 的自助法估计
+idi_boot <- numeric(npert)
+nri_boot <- numeric(npert)
+
+set.seed(123)  # 设置种子，确保可重复性
+
+for (i in 1:npert) {
+  # 自助抽样
+  sample_indices <- sample(1:nrow(data_4), nrow(data_4), replace = TRUE)
+  data_sample <- data_4[sample_indices, ]
+  p_old_sample <- p_old[sample_indices]
+  p_new_sample <- p_new[sample_indices]
+  
+  # 输出检查信息
+  cat("Iteration:", i, "\n")
+  cat("Sample size:", nrow(data_sample), "\n")
+  cat("Unique event values:", unique(data_sample$event), "\n")
+  cat("Length of p_old_sample:", length(p_old_sample), "\n")
+  cat("Length of p_new_sample:", length(p_new_sample), "\n")
+  
+  # 确保 event 列只包含有效值（0 或 1）
+  if (all(data_sample$event %in% c(0, 1)) && length(p_old_sample) == length(data_sample$event) && length(p_new_sample) == length(data_sample$event)) {
+    
+    # 计算每个自助样本的 IDI 和 NRI
+    idi_boot[i] <- tryCatch({
+      IDI.INF(data_sample$time, data_sample$event, p_old_sample, p_new_sample, npert = 1000)
+    }, error = function(e) {
+      warning(paste("Error in IDI calculation:", e$message))
+      return(NA)
+    })
+    
+    nri_boot[i] <- tryCatch({
+      NRI.INF(data_sample$time, data_sample$event, p_old_sample, p_new_sample, npert = 1000)
+    }, error = function(e) {
+      warning(paste("Error in NRI calculation:", e$message))
+      return(NA)
+    })
+    
+  } else {
+    warning(paste("Invalid data in sample", i))
+    idi_boot[i] <- NA
+    nri_boot[i] <- NA
+  }
+}
+
+
+
+# 计算置信区间
+idi_ci <- quantile(idi_boot, c(0.025, 0.975))
+nri_ci <- quantile(nri_boot, c(0.025, 0.975))
+
+# 输出结果
+print(paste("IDI 95% CI: [", idi_ci[1], ", ", idi_ci[2], "]", sep = ""))
+print(paste("NRI 95% CI: [", nri_ci[1], ", ", nri_ci[2], "]", sep = ""))
+
+```
+
+
+
+
+
+
+
+```{r}
+# 确保包已加载
+library(survIDINRI)
+
+# 修复事件变量
+data_4$event <- as.integer(data_4$终点事件 %in% 1)  # 直接转换原始列，避免中间步骤出错
+data_4 <- data_4[complete.cases(data_4[, c("time", "event")]), ]
+
+# 修正时间截断逻辑
+data_4$event <- ifelse(data_4$time > 48 & data_4$event == 1, 1, 0)
+data_4$time <- pmin(data_4$time, 48)
+
+# 提取预测概率并检查
+p_old <- data_4$Predicted_risk_with_race_60
+p_new <- data_4$Predicted_risk_with_race_48
+p_old <- pmax(pmin(p_old, 1), 0)
+p_new <- pmax(pmin(p_new, 1), 0)
+
+# 重新运行函数
+idi_result <- IDI.INF(
+  data_4$time, 
+  data_4$event, 
+  p_old, 
+  p_new, 
+  t0 = 48,  # 明确指定时间点
+  npert = 1000
+)
+install.packages("nricens")
+library(nricens)
+nri_result <- nribin(
+  event = data_4$event,
+  p.std = p_old,
+  p.new = p_new,
+  cut = 0.5,  # 根据实际情况调整阈值
+  updown = "diff"
+)
+
+
+```
+
+
+
+
+
+
+```{r}
+
+# 检查事件变量
+data_4$event <- as.numeric(as.character(data_4$event)) # 确保是数值
+data_4$event <- ifelse(data_4$event == 0, 0, 1) # 强制转换为0/1
+
+
+# 确保生存时间和事件信息是数值型
+data_4$event <- as.numeric(data_4$终点事件)  # 终点事件 (0=无, 1=有)
+data_4$time <- as.numeric(data_4$CombindT_m)  # 随访时间 
+
+# 统一时间点到 48 个月，超出的时间截断
+data_4$event[data_4$time > 48] <- 0  # 超过 48 个月但未发生事件的，视为未发生
+data_4$time[data_4$time > 48] <- 48  # 超过 48 个月的生存时间，截断为 48
+
+# 提取新旧模型的预测概率
+p_old <- data_4$Predicted_risk_with_race_60  # 旧模型
+p_new <- data_4$Predicted_risk_with_race_48  # 新模型
+
+# 假设 p_old 和 p_new 是模型的预测概率，data_4$event 是实际事件标签
+# 计算 IDI 和 NRI
+idi_result <- IDI.INF(data_4$time, data_4$event, p_old, p_new, npert = 1000)
+nri_result <- NRI.INF(data_4$time, data_4$event, p_old, p_new, npert = 1000)
+
+
+# 打印结果
+print(result)
+```

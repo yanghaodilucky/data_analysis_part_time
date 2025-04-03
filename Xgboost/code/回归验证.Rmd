@@ -1,0 +1,227 @@
+---
+title: "回归验证"
+author: "HD"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+唾液因子：0 1 2 16 4
+血清因子：0 1 2
+```{r}
+library(dplyr)
+library(readxl)
+library(ggplot2)
+```
+
+```{r}
+rm(list=ls())
+
+data <- read_excel("../data/eight.xlsx", col_names = TRUE, row.names(TRUE) )
+
+```
+
+
+```{r}
+tuoye <- c("MCP1_t", "TNFa_t", "CASP1_t", "GM_CSF_t", "CTSK_t")  # 唾液因子
+xueqing <- c("MCP1_x", "TNFa_x", "CASP1_x")  # 血清因子
+targets <- c("BVTV", "Tb.Sp", "M1")  # 目标变量
+```
+
+
+```{r}
+evaluate_model <- function(model, data, target) {
+  predictions <- predict(model, newdata = data)
+  actuals <- data[[target]]
+  mse <- mean((predictions - actuals)^2)
+  r2 <- summary(model)$r.squared
+  return(c(MSE = mse, R2 = r2))
+}
+
+# 结果存储
+results <- data.frame(Model = character(), Target = character(), MSE = numeric(), R2 = numeric())
+
+```
+
+```{r}
+for (target in targets) {
+  
+  # 唾液因子建模
+  model_saliva <- lm(as.formula(paste(target, "~", paste(tuoye, collapse = " + "))), data = data)
+  res_saliva <- evaluate_model(model_saliva, data, target)
+  results <- rbind(results, data.frame(Model = "tuoye", Target = target, MSE = res_saliva["MSE"], R2 = res_saliva["R2"]))
+  
+  # 血清因子建模
+  model_serum <- lm(as.formula(paste(target, "~", paste(xueqing, collapse = " + "))), data = data)
+  res_serum <- evaluate_model(model_serum, data, target)
+  results <- rbind(results, data.frame(Model = "xueqing", Target = target, MSE = res_serum["MSE"], R2 = res_serum["R2"]))
+  
+  # 合并因子建模
+  all_factors <- c(tuoye, xueqing)
+  model_combined <- lm(as.formula(paste(target, "~", paste(all_factors, collapse = " + "))), data = data)
+  res_combined <- evaluate_model(model_combined, data, target)
+  results <- rbind(results, data.frame(Model = "Combined", Target = target, MSE = res_combined["MSE"], R2 = res_combined["R2"]))
+}
+
+# 输出结果
+print(results)
+
+write.csv(results, "../result/results.csv")
+```
+单独使用血清因子（xueqing）比唾液因子（tuoye）表现更好（MSE更低，R²更高），特别是在 BV/TV 和 Tb.Sp 上：
+
+BV/TV: 血清因子的 R² = 0.39，高于唾液因子的 0.14
+Tb.Sp: 血清因子的 R² = 0.95，远高于唾液因子的 0.82
+但 M1 的 R² 反而是唾液因子更高 (0.75 vs 0.69)，可能说明 M1 变量与唾液因子的关系更强
+合并因子（Combined）后整体预测效果提升：
+
+所有目标变量的 MSE 都降低了，R² 也提高了
+特别是 BV/TV（R² 提升到 0.50）和 Tb.Sp（R² 提升到 0.96）
+结论
+血清因子在 BV/TV 和 Tb.Sp 预测能力更强
+唾液因子在 M1 上可能更有价值
+合并因子后预测效果总体最好，所以建议使用联合模型来提升预测能力
+
+```{r}
+# 预测值计算函数
+get_predictions <- function(model, data, target) {
+  data.frame(Actual = data[[target]], Predicted = predict(model, newdata = data))
+}
+
+# 创建空列表存储预测结果
+predictions_list <- list()
+
+# 逐个目标变量绘制散点图
+for (target in targets) {
+  
+  # 建立回归模型
+  model_saliva <- lm(as.formula(paste(target, "~", paste(tuoye, collapse = " + "))), data = data)
+  model_serum <- lm(as.formula(paste(target, "~", paste(xueqing, collapse = " + "))), data = data)
+  model_combined <- lm(as.formula(paste(target, "~", paste(c(tuoye, xueqing), collapse = " + "))), data = data)
+  
+  # 获取预测值
+  pred_saliva <- get_predictions(model_saliva, data, target)
+  pred_serum <- get_predictions(model_serum, data, target)
+  pred_combined <- get_predictions(model_combined, data, target)
+  
+  # 添加模型标签
+  pred_saliva$Model <- "Saliva"
+  pred_serum$Model <- "Serum"
+  pred_combined$Model <- "Combined"
+  
+  # 合并数据
+  pred_all <- rbind(pred_saliva, pred_serum, pred_combined)
+  pred_all$Target <- target
+  
+  # 存入列表
+  predictions_list[[target]] <- pred_all
+  
+  # 画散点图
+  p <- ggplot(pred_all, aes(x = Actual, y = Predicted, color = Model)) +
+    geom_point(alpha = 0.6) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    theme_minimal() +
+    labs(title = paste("Actual vs. Predicted for", target), x = "Actual Value", y = "Predicted Value") +
+    scale_color_manual(values = c("Saliva" = "blue", "Serum" = "red", "Combined" = "green"))
+  
+  print(p)
+}
+
+```
+保存图片
+```{r}
+# 设置保存目录（可修改）
+output_dir <- "../visulization/"  # 这里替换成你的实际路径
+
+# 逐个目标变量保存图片
+for (target in names(predictions_list)) {
+  
+  # 获取对应的数据
+  pred_all <- predictions_list[[target]]
+  
+  # 画图
+  p <- ggplot(pred_all, aes(x = Actual, y = Predicted, color = Model)) +
+    geom_point(alpha = 0.6) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    theme_minimal() +
+    theme_bw() +  # 设置白色背景
+    labs(title = paste("Actual vs. Predicted for", target), x = "Actual Value", y = "Predicted Value") +
+    scale_color_manual(values = c("Saliva" = "blue", "Serum" = "red", "Combined" = "green"))
+  
+  # 保存图片
+  file_name <- paste0(output_dir, "Actual_vs_Predicted_", target, ".png")
+  ggsave(file_name, plot = p, width = 6, height = 5, dpi = 300)
+}
+```
+
+
+将前3个因子与第一个因子的模型进行比较，看模型性能的提高程度
+
+```{r}
+
+tuoye_top3 <- c("MCP1_t", "TNFa_t", "CASP1_t")  # 唾液因子
+tuoye_top1 <- c("MCP1_t")  # 唾液因子
+
+
+xueqing_top3 <- c("MCP1_t", "TNFa_t", "CASP1_t")  # 唾液因子
+xueqing_top1 <- c("MCP1_t")  # 唾液因子
+
+targets <- c("BVTV", "Tb.Sp", "M1")  # 目标变量
+
+```
+
+```{r}
+evaluate_model <- function(model, data, target) {
+  predictions <- predict(model, newdata = data)
+  actuals <- data[[target]]
+  mse <- mean((predictions - actuals)^2)
+  r2 <- summary(model)$r.squared
+  return(c(MSE = mse, R2 = r2))
+}
+
+# 结果存储
+results_2 <- data.frame(Model = character(), Target = character(), MSE = numeric(), R2 = numeric())
+
+
+```
+
+
+```{r}
+for (target in targets) {
+  
+  # 唾液top3建模
+  model_saliva_top3 <- lm(as.formula(paste(target, "~", paste(tuoye_top3, collapse = " + "))), data = data)
+  res_saliva_top3 <- evaluate_model(model_saliva_top3, data, target)
+  results_2 <- rbind(results, data.frame(Model = "model_saliva_top3", Target = target, MSE = res_saliva_top3["MSE"], R2 = res_saliva_top3["R2"]))
+  
+  # 唾液top1建模
+  model_saliva_top1 <- lm(as.formula(paste(target, "~", paste(tuoye_top1, collapse = " + "))), data = data)
+  res_saliva_top1 <- evaluate_model(model_saliva_top1, data, target)
+  results_2 <- rbind(results, data.frame(Model = "model_saliva_top1", Target = target, MSE = res_saliva_top1["MSE"], R2 = res_saliva_top1["R2"]))
+  
+  # 血清top3建模
+  model_serum_top3 <- lm(as.formula(paste(target, "~", paste(xueqing_top3, collapse = " + "))), data = data)
+  res_serum_top3 <- evaluate_model(model_serum_top3, data, target)
+  results_2 <- rbind(results, data.frame(Model = "model_serum_top3", Target = target, MSE = res_serum_top3["MSE"], R2 = res_serum_top3["R2"]))
+  
+  # 血清top1建模
+  model_serum_top1 <- lm(as.formula(paste(target, "~", paste(xueqing_top1, collapse = " + "))), data = data)
+  res_serum_top1 <- evaluate_model(model_serum_top1, data, target)
+  results_2 <- rbind(results, data.frame(Model = "model_serum_top1", Target = target, MSE = res_serum_top1["MSE"], R2 = res_serum_top1["R2"]))
+  
+}
+
+# 输出结果
+print(results_2)
+
+write.csv(results_2, "../result/results_3vs1.csv")
+```
+
+
+
+
