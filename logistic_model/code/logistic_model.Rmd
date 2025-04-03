@@ -1,0 +1,549 @@
+---
+title: "logistic model"
+author: "HD"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(haven)
+library(tableone)
+library(dplyr)
+library(e1071)
+library(ggplot2)
+library(ggcorrplot)
+library(pROC)
+library(ResourceSelection) # Hosmer-Lemeshow检验
+library(rms)  # 校准曲线
+library(rmda)
+library(survival)
+```
+
+导入数据，将列名改为英文
+```{r}
+rm(list=ls())
+
+data <- read_sav("../data/data.sav")
+
+data <- data %>%
+  rename(
+    SEQN = SEQN,
+    Gender = 性别,
+    Age = 年龄,
+    Race = 种族,
+    Education = 教育水平,
+    Marital_Status = 婚姻状况,
+    BMI = BMI,
+    Weight_lb = `体重（磅）`,
+    Height_ft = `身高（英尺）`,
+    Triglycerides = 甘油三酯,
+    LDL = LDL,
+    Total_Cholesterol = 总胆固醇,
+    HDL = HDL,
+    Systolic_BP = 收缩压,
+    Diastolic_BP = 舒张压,
+    Fasting_Glucose = 空腹血糖,
+    Uric_Acid = 尿酸,
+    Smoking_Status = 吸烟状态,
+    Alcohol_Status = 饮酒状态,
+    Hypertension = 是否有高血压,
+    BP_Meds = 是否服用降压药,
+    Diabetes = 是否有糖尿病,
+    Insulin_Use = 是否服用胰岛素,
+    CHF = 充血性心衰,
+    CHD = 冠心病,
+    Angina = 心绞痛,
+    Heart_Disease = 心脏病,
+    Stroke = 中风,
+    CVD = 心血管疾病,
+    PIR_Group = PIR分组,
+    BMI_Group = BMI分组,
+    TyG_Index = TyG指数,
+    UA_Group = UA分组,
+    TyG_Group = TyG分组,
+    UA_TyG_Group = UA_TyG分组
+  )
+
+
+```
+
+处理缺失值
+
+```{r}
+table(data$Alcohol_Status)
+
+table(data$BP_Meds)
+
+data$Alcohol_Status[data$Alcohol_Status == "NA"] <- NA
+data$BP_Meds[data$BP_Meds == "NA"] <- NA
+
+#table(data$Alcohol_Status, useNA = "always")
+#table(data$BP_Meds, useNA = "always")
+
+
+class(data$Alcohol_Status)
+class(data$BP_Meds) # 可以知道这两个变量是haven labeled
+
+#data$Alcohol_Status <- as.numeric(as_factor(data$Alcohol_Status))
+#data$BP_Meds <- as.numeric(as_factor(data$BP_Meds))
+
+data$Alcohol_Status <- as_factor(data$Alcohol_Status)
+data$BP_Meds <- as_factor(data$BP_Meds)
+```
+
+
+```{r}
+#data$Alcohol_Status[data$Alcohol_Status == "NA"] <- NA
+#data$BP_Meds[data$BP_Meds == "NA"] <- NA
+
+table(data$Alcohol_Status)
+table(data$BP_Meds)
+summary <- summary(data)
+
+# 将数据的基本情况输出
+write.csv(summary, "../result/data_summary_raw.csv")
+
+```
+
+根据data_summary.csv我们知道Alcohol_Status和BP_Meds有缺失值。
+
+接下来使用众数插值法进行插值
+
+```{r}
+
+# 使用 "轻度" 填充 Alcohol_Status 中的缺失值
+data$Alcohol_Status[is.na(data$Alcohol_Status)] <- "轻度"
+
+# 使用 "有" 填充 BP_Meds 中的缺失值
+data$BP_Meds[is.na(data$BP_Meds)] <- "有"
+
+
+# 检查 Alcohol_Status 的填充效果
+table(data$Alcohol_Status, useNA = "always")
+
+# 检查 BP_Meds 的填充效果
+table(data$BP_Meds, useNA = "always")
+
+data$Alcohol_Status <- factor(data$Alcohol_Status, 
+                              levels = c("从不", "从前", "轻度", "中度", "重度"), 
+                              labels = c(1, 2, 3, 4, 5))
+
+data$BP_Meds <- factor(data$BP_Meds, 
+                       levels = c("有", "无", "9"),
+                       label = c(1,2,9))
+
+# 检查 Alcohol_Status 的填充效果
+table(data$Alcohol_Status, useNA = "always")
+
+# 检查 BP_Meds 的填充效果
+table(data$BP_Meds, useNA = "always")
+
+
+summary <- summary(data)
+
+# 将数据的基本情况输出
+write.csv(summary, "../result/data_summary.csv")
+
+
+```
+
+
+## 描述性统计分析,T检验，卡方检验
+  data_summary.csv 这个表格体现了每个变量的均值，中位数，四分位数。
+```{r}
+summary <- summary(data)
+
+# 将数据的基本情况输出
+write.csv(summary, "../result/data_summary.csv")
+
+```
+
+
+
+在这个表格T_CHisquare.csv中体现了每个变量与CVD进行t检验和卡方检验的结果。
+连续变量t检验，分类变量卡方检验。
+
+```{r}
+data <- data %>%
+  mutate(
+    Gender = as_factor(Gender),
+    Race = as_factor(Race),
+    Education = as_factor(Education),
+    Marital_Status = as_factor(Marital_Status),
+    Smoking_Status = as_factor(Smoking_Status),
+    Hypertension = as_factor(Hypertension),
+    Diabetes = as_factor(Diabetes),
+    Insulin_Use = as_factor(Insulin_Use),
+    CHF = as_factor(CHF), 
+    CHD = as_factor(CHD),
+    Angina= as_factor(Angina),
+    Heart_Disease = as_factor(Heart_Disease), 
+     Stroke= as_factor(Stroke), 
+    CVD = as_factor(CVD), 
+    PIR_Group = as_factor(PIR_Group), 
+     BMI_Group  = as_factor(BMI_Group), 
+    UA_Group = as_factor(UA_Group), 
+    TyG_Group = as_factor(TyG_Group),
+    UA_TyG_Group = as_factor(UA_TyG_Group)
+  )
+
+
+vars <- setdiff(names(data), "SEQN")  # 排除 SEQN 列
+table1 <- CreateTableOne(vars = vars, data = data,strata = "CVD",  test = TRUE, smd = TRUE)
+print(table1, showAllLevels = TRUE)
+
+
+write.csv(print(table1), "../result/T_CHisquare.csv")
+
+```
+
+根据t检验和卡方检验的结果，我们知道除了TyG指数，尿酸水平之外，大部分变量都与CVD有显著关联，除了教育水平，所以之后的回归模型会将教育水平剔除。
+
+## 相关性分析
+
+正态分布的使用Pearson 相关系数
+因为样本量过大，8000+，根据中心极限定理，即使原始数据不完全符合正态分布，随着样本量的增加，样本均值的分布通常会趋近于正态分布。因此，对于如此大的样本量，通常可以认为数据近似正态分布
+
+结果保存在visulization/correlation_heatmap.png 中
+```{r}
+
+cont_vars <- c("TyG_Index", "Uric_Acid", "BMI", "Age",
+               "LDL", "HDL", "Total_Cholesterol", "Triglycerides", 
+               "Systolic_BP", "Diastolic_BP", "Fasting_Glucose")
+
+
+
+# 提取相关的列
+data_cont <- data[, cont_vars]
+
+# 计算皮尔逊相关系数矩阵
+cor_matrix <- cor(data_cont, use = "complete.obs", method = "pearson")
+
+# 打印相关系数矩阵
+print(cor_matrix)
+
+write.csv(cor_matrix, "../result/相关性矩阵.csv")
+
+# 热图
+# 生成热图
+corplot <- ggcorrplot(cor_matrix, 
+                      method = "square", 
+                      type = "lower", 
+                      lab = TRUE)
+
+# 修改背景为白色
+corplot <- corplot + theme(
+  panel.background = element_rect(fill = "white"), # 设置背景为白色
+  plot.background = element_rect(fill = "white"),  # 设置整体背景为白色
+  panel.grid = element_blank() # 去掉网格线
+)
+
+ggsave("../visulization/correlation_heatmap.png", plot = corplot, width = 10, height = 8, dpi = 300)
+
+```
+
+
+## logistic回归模型
+
+目标变量CVD，主要自变量TyG_Index和Uric_Acid，分组变量有TyG_Group，UA_Group，UA_TyG_Group
+三个模型：
+模型一 只包括TyG和UA的模型
+模型二 增加协变量:先增加人口学特征，再增加代谢因素
+模型三 探索TyG和UA的交叉项
+
+发现增加交互相之后没有改变预测能力，增加某些协变量会增强预测能力
+```{r}
+#先把分类变量的映射都换为数字
+#table(data$CVD)
+data$CVD <- ifelse(data$CVD == "否", 0, 1)
+#table(data$CVD)
+
+#table(data$UA_Group)
+data$UA_Group <- ifelse(data$UA_Group == "男性<,7.0,女性<6", 0, 1)
+#table(data$UA_Group)
+
+#table(data$TyG_Group)
+data$TyG_Group <- ifelse(data$TyG_Group == "小于中位数", 0, 1)
+#table(data$TyG_Group)
+
+#table(data$UA_TyG_Group)
+data$UA_TyG_Group <- factor(data$UA_TyG_Group, 
+                            levels = c("低UA和低TyG", "高UA和低TyG", "低UA和高TyG", "高UA和高TyG"), 
+                            labels = c(1, 2, 3, 4))
+#table(data$UA_TyG_Group)
+
+#table(data$Gender)
+data$Gender <- ifelse(data$Gender == "男性", 0, 1)
+#table(data$Gender)
+
+#table(data$Race)
+data$Race <- factor(data$Race, 
+                            levels = c("西班牙裔", "非西班牙裔", "白人", "黑人", "其他种族"), 
+                            labels = c(1, 2, 3, 4, 5))
+#table(data$Race)
+
+#table(data$Marital_Status)
+data$Marital_Status <- factor(data$Marital_Status, 
+                            levels = c("未婚", "已婚", "与伴侣同住"), 
+                            labels = c(1, 2, 3))
+#table(data$Marital_Status)
+
+
+#table(data$Smoking_Status)
+data$Smoking_Status <- factor(data$Smoking_Status, 
+                            levels = c("从不", "从前", "现在"), 
+                            labels = c(1, 2, 3))
+#table(data$Smoking_Status)
+
+
+# logistic回归模型
+
+lm1 <- glm(CVD ~ TyG_Index + Uric_Acid ,
+                   data = data, 
+                   family = "binomial")
+summary(lm1)
+
+lm2_1 <- glm(CVD ~ TyG_Index + Uric_Acid + Gender + Age + Race +  BMI +Marital_Status ,
+                   data = data, 
+                   family = "binomial")
+summary(lm2_1)
+
+lm2_2 <- glm(CVD ~ TyG_Index + Uric_Acid +Gender + Age +  BMI + Triglycerides+LDL + HDL +Smoking_Status + Marital_Status + Race +BP_Meds  ,
+                   data = data, 
+                   family = "binomial")
+summary(lm2_2)
+
+
+# lm3 增加交互相TyG_Index * Uric_Acid
+lm3 <- glm(CVD ~ TyG_Index * Uric_Acid + TyG_Index + Uric_Acid ,
+                   data = data, 
+                   family = "binomial")
+summary(lm3)
+
+# 增加交互相之后没有改变预测能力模型2-2是最好的
+```
+我觉得模型lm2_2是最好的，包括这些协变量：Gender + Age +  BMI + Triglycerides+LDL + HDL +Smoking_Status + Marital_Status + Race。
+
+
+## 预测模型
+
+接下来计算预测概率，评估模型性能,最终得到AUC0.716，结果良好，可以用在实际场景中。
+
+```{r}
+
+# 查看AIC
+AIC(lm2_2)
+
+# 获取预测概率
+pred_probs <- predict(lm2_2, type = "response")
+
+# 将预测结果转换为类别
+pred_class <- ifelse(pred_probs > 0.5, 1, 0)  # 阈值为0.5，根据需要调整
+
+roc_curve <- roc(data$CVD, pred_probs)
+roc_curve$sensitivities  # 灵敏度（Sensitivity）
+roc_curve$specificities  # 特异度（Specificity）
+
+
+# 计算Youden Index对应的最佳阈值
+best_threshold <- roc_curve$thresholds[which.max(roc_curve$sensitivities + roc_curve$specificities - 1)]
+
+# 找到该阈值对应的灵敏度和特异度
+best_sensitivity <- roc_curve$sensitivities[which(roc_curve$thresholds == best_threshold)]
+best_specificity <- roc_curve$specificities[which(roc_curve$thresholds == best_threshold)]
+
+print(paste("最佳阈值:", best_threshold))
+print(paste("最佳灵敏度:", best_sensitivity))
+print(paste("最佳特异度:", best_specificity))
+
+plot(roc_curve, main = "ROC Curve", col = "blue", lwd = 2)
+
+# 转换为 ggplot 对象
+roc_ggplot <- ggroc(roc_curve)
+# 保存为 PNG 文件
+ggsave("../visulization/roc_curve_ggplot.png", plot = roc_ggplot, width = 8, height = 6)
+
+
+auc(roc_curve)
+
+ci(roc_curve, method = "delong")
+```
+
+输出95%置信区间
+```{r}
+
+# 计算模型参数的95%置信区间
+confint <- confint(lm2_2, level = 0.95)
+write.csv(confint, "../result/confint.csv")
+
+print(confint)
+```
+
+
+校准度分析
+```{r}
+# 生成预测概率
+data$pred_prob <- predict(lm2_2, type = "response")
+
+# Hosmer-Lemeshow检验
+hl_test <- hoslem.test(lm2_2$y, data$pred_prob, g = 10)
+print(hl_test)
+
+
+```
+校准度评估：
+
+p值 = 0.66 远大于常见显著性水平（0.05）
+
+结论：无法拒绝原假设，表明模型的预测概率与观测结果具有良好的一致性
+
+实际意义：模型能够准确预测事件发生的概率（例如，当模型预测10%概率时，实际观测到的事件发生率也接近10%）
+
+
+临床效用分析
+
+```{r}
+# 决策曲线分析
+dca_data <- decision_curve(CVD ~ pred_prob, 
+                          data = data,
+                          policy = "opt-in",
+                          fitted.risk = TRUE,
+                          thresholds = seq(0, 1, by = 0.01))
+
+# 绘制决策曲线
+plot_decision_curve(dca_data,
+                    curve.names = "My Model",
+                    cost.benefit.axis = FALSE,
+                    standardize = FALSE,
+                    confidence.intervals = FALSE)
+
+
+dca_results <- dca_data$net.benefit
+
+# 阈值概率
+thresholds <- dca_data$thresholds
+
+# 找到模型净收益大于'None'和'All'的部分
+model_above_none <- thresholds[dca_results > 0]
+model_above_all <- thresholds[dca_results > 1]
+
+# 打印结果
+cat("阈值范围，模型净收益位于'None'和'All'线之间：", min(model_above_none), "到", max(model_above_none), "\n")
+cat("净收益值范围：", min(dca_results), "到", max(dca_results), "\n")
+
+
+# 临床影响曲线
+plot_clinical_impact(dca_data,
+                     population.size = 1000,
+                     cost.benefit.axis = FALSE,
+                     confidence.intervals = FALSE)
+
+
+
+ggsave("../visulization/Decision_Curve_ggplot.png", 
+       plot = plot_decision_curve(dca_data,
+                    curve.names = "My Model",
+                    cost.benefit.axis = FALSE,
+                    standardize = FALSE,
+                    confidence.intervals = FALSE), # 替换为完整参数
+       width = 8, height = 6, dpi = 300)
+
+
+ggsave("../visulization/clinical_impact.png", 
+       plot = plot_clinical_impact(dca_data,
+                     population.size = 1000,
+                     cost.benefit.axis = FALSE,
+                     confidence.intervals = FALSE), # 替换为完整参数
+       width = 8, height = 6, dpi = 300)
+```
+单独的TyG指数模型
+
+```{R}
+lm_tyg <- glm(CVD ~ TyG_Index  +Gender + Age +  BMI + Triglycerides+LDL + HDL +Smoking_Status + Marital_Status + Race +BP_Meds  ,
+                   data = data, 
+                   family = "binomial")
+summary(lm_tyg)
+
+# 查看AIC
+AIC(lm_tyg)
+
+# 获取预测概率
+pred_probs <- predict(lm_tyg, type = "response")
+
+# 将预测结果转换为类别
+pred_class <- ifelse(pred_probs > 0.5, 1, 0)  # 阈值为0.5，根据需要调整
+
+roc_curve <- roc(data$CVD, pred_probs)
+plot(roc_curve, main = "ROC Curve", col = "blue", lwd = 2)
+
+# 转换为 ggplot 对象
+roc_ggplot_tyg <- ggroc(roc_curve)
+# 保存为 PNG 文件
+ggsave("../visulization/roc_curve_ggplot.png", plot = roc_ggplot, width = 8, height = 6)
+
+
+auc(roc_curve)
+
+# 计算模型参数的95%置信区间
+confint_tyg <- confint(lm_tyg, level = 0.95)
+write.csv(confint_tyg, "../result/confint_tyg.csv")
+
+print(confint_tyg)
+```
+
+
+
+
+
+单独的UA指数模型
+```{r}
+lm_UA <- glm(CVD ~ Uric_Acid  +Gender + Age +  BMI + Triglycerides+LDL + HDL +Smoking_Status + Marital_Status + Race +BP_Meds  ,
+                   data = data, 
+                   family = "binomial")
+summary(lm_UA)
+
+# 查看AIC
+AIC(lm_UA)
+
+# 获取预测概率
+pred_probs <- predict(lm_UA, type = "response")
+
+# 将预测结果转换为类别
+pred_class <- ifelse(pred_probs > 0.5, 1, 0)  # 阈值为0.5，根据需要调整
+
+roc_curve <- roc(data$CVD, pred_probs)
+plot(roc_curve, main = "ROC Curve", col = "blue", lwd = 2)
+
+# 转换为 ggplot 对象
+roc_ggplot_tyg <- ggroc(roc_curve)
+# 保存为 PNG 文件
+ggsave("../visulization/roc_curve_ggplot.png", plot = roc_ggplot, width = 8, height = 6)
+
+
+auc(roc_curve)
+
+# 计算模型参数的95%置信区间
+confint_ua <- confint(lm_UA, level = 0.95)
+write.csv(confint_ua, "../result/confint_ua.csv")
+
+print(confint_ua)
+
+```
+HR表格
+
+```{r}
+lm_hr <- glm(CVD ~ UA_TyG_Group  +Gender + Age +  BMI + Triglycerides+LDL + HDL +Smoking_Status + Marital_Status + Race +BP_Meds  ,
+                   data = data, 
+                   family = "binomial")
+
+summary(lm_hr)
+
+# 计算 OR（e^β）和 95% CI
+exp(cbind(OR = coef(lm_hr), confint(lm_hr)))
+
+```
